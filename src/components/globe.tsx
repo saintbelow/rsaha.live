@@ -1,7 +1,11 @@
+"use client"
+
 import { useEffect, useRef } from "react"
 
 export function Globe() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const buttonContainerRef = useRef<HTMLDivElement>(null)
+  const rootContainerRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -9,10 +13,172 @@ export function Globe() {
     const ctx = canvas.getContext("2d", { willReadFrequently: true })
     if (!ctx) return
 
+    let viewportWidth = window.innerWidth
+    let viewportHeight = window.innerHeight
+    let devicePixelRatio = window.devicePixelRatio || 1
+
+    let isMobile = viewportWidth < 768
+    let isTablet = viewportWidth >= 768 && viewportWidth < 1024
+
+    let radiusMultiplier = isMobile ? 0.35 : isTablet ? 0.32 : 0.3
+    let baseRadius = Math.max(1, Math.min(viewportWidth, viewportHeight) * radiusMultiplier)
+    let zoomLevel = 1.0
+    let targetZoom = 1.0
+
+    const getMinGlobeRadius = () => (isMobile ? 80 : 120)
+    let minZoom = getMinGlobeRadius() / baseRadius
+
+    let centerX = viewportWidth / 2
+    let centerY = isMobile ? viewportHeight * 0.4 : viewportHeight / 2
+    const computeMaxZoom = () => {
+      const maxRadius = Math.min(
+        centerX * 0.85,
+        centerY * 0.85,
+        (viewportHeight - centerY) * 0.85,
+      )
+      return Math.max(1, maxRadius / baseRadius)
+    }
+    let maxZoom = computeMaxZoom()
+
+    const lerp = (start: number, end: number, t: number) => start + (end - start) * t
+    const easeInOutCubic = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2)
+
+    const computeLogoRadius = () => {
+      const minDimension = Math.min(viewportWidth, viewportHeight)
+      const relative = minDimension * (isMobile ? 0.22 : 0.18)
+      const minimum = isMobile ? 82 : 96
+      const maximum = isMobile ? 132 : 152
+      return Math.max(minimum, Math.min(maximum, relative))
+    }
+
+    const computeLogoTargetCenter = (radius: number) => {
+      const minX = Math.max(radius + 28, isMobile ? 96 : 128)
+      const minY = Math.max(radius + (isMobile ? 36 : 52), isMobile ? 96 : 132)
+      const maxX = Math.max(minX, viewportWidth - radius - 24)
+      const maxY = Math.max(minY, viewportHeight - radius - 24)
+      return {
+        x: Math.min(minX, maxX),
+        y: Math.min(minY, maxY),
+      }
+    }
+
+    let targetLogoRadius = computeLogoRadius()
+    let finalLogoZoom = Math.min(1, Math.max(targetLogoRadius / baseRadius, 0.14))
+    let { x: targetCenterX, y: targetCenterY } = computeLogoTargetCenter(targetLogoRadius)
+
+    const movementDuration = 6200
+    let movementElapsed = 0
+    let movementSettled = false
+
+    const buildMovementKeyframes = () => {
+      const originX = viewportWidth / 2
+      const originY = isMobile ? viewportHeight * 0.4 : viewportHeight / 2
+      const midX = originX + (targetCenterX - originX) * 0.55
+      const midY = originY + (targetCenterY - originY) * 0.55
+      const liftZoom = Math.min(0.9, Math.max(finalLogoZoom + 0.25, finalLogoZoom * 1.6))
+      return [
+        { time: 0, x: originX, y: originY, zoom: 1 },
+        { time: 0.42, x: originX, y: originY * 0.78, zoom: liftZoom },
+        { time: 0.7, x: midX, y: midY, zoom: finalLogoZoom * 1.12 },
+        { time: 1, x: targetCenterX, y: targetCenterY, zoom: finalLogoZoom },
+      ]
+    }
+
+    let movementKeyframes = buildMovementKeyframes()
+
+    const sampleMovement = (progress: number) => {
+      if (progress <= 0) {
+        return movementKeyframes[0]
+      }
+
+      if (progress >= 1) {
+        return movementKeyframes[movementKeyframes.length - 1]
+      }
+
+      const nextIndex = movementKeyframes.findIndex((frame) => progress <= frame.time)
+      const upperIndex = Math.max(1, nextIndex)
+      const previous = movementKeyframes[upperIndex - 1]
+      const next = movementKeyframes[upperIndex]
+      const segmentSpan = Math.max(0.0001, next.time - previous.time)
+      const segmentProgress = (progress - previous.time) / segmentSpan
+      const eased = easeInOutCubic(segmentProgress)
+
+      return {
+        time: progress,
+        x: lerp(previous.x, next.x, eased),
+        y: lerp(previous.y, next.y, eased),
+        zoom: lerp(previous.zoom, next.zoom, eased),
+      }
+    }
+
+    const applyButtonTransform = (radius: number) => {
+      const buttonEl = buttonContainerRef.current
+      if (!buttonEl) return
+
+      const relativeRadius = baseRadius > 0 ? radius / baseRadius : 1
+      const scale = Math.max(0.85, Math.min(1.15, relativeRadius))
+
+      buttonEl.style.left = `${centerX}px`
+      buttonEl.style.top = `${centerY}px`
+      buttonEl.style.transform = [
+        "translate(-50%, -50%)",
+        `scale(${scale})`,
+      ].join(" ")
+
+      if (buttonEl.style.opacity !== "1") {
+        buttonEl.style.opacity = "1"
+      }
+    }
+
     // Set canvas size
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
+      viewportWidth = window.innerWidth
+      viewportHeight = window.innerHeight
+      devicePixelRatio = window.devicePixelRatio || 1
+
+      canvas.style.width = `${viewportWidth}px`
+      canvas.style.height = `${viewportHeight}px`
+      canvas.width = Math.floor(viewportWidth * devicePixelRatio)
+      canvas.height = Math.floor(viewportHeight * devicePixelRatio)
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+      ctx.scale(devicePixelRatio, devicePixelRatio)
+
+      isMobile = viewportWidth < 768
+      isTablet = viewportWidth >= 768 && viewportWidth < 1024
+
+      radiusMultiplier = isMobile ? 0.35 : isTablet ? 0.32 : 0.3
+      baseRadius = Math.max(1, Math.min(viewportWidth, viewportHeight) * radiusMultiplier)
+      minZoom = getMinGlobeRadius() / baseRadius
+      maxZoom = computeMaxZoom()
+
+      targetLogoRadius = computeLogoRadius()
+      finalLogoZoom = Math.min(1, Math.max(targetLogoRadius / baseRadius, 0.14))
+      const centerTarget = computeLogoTargetCenter(targetLogoRadius)
+      targetCenterX = centerTarget.x
+      targetCenterY = centerTarget.y
+
+      movementKeyframes = buildMovementKeyframes()
+
+      minZoom = Math.min(minZoom, finalLogoZoom)
+      targetZoom = Math.min(Math.max(targetZoom, minZoom), maxZoom)
+      zoomLevel = Math.min(Math.max(zoomLevel, minZoom), maxZoom)
+
+      const movementProgress = movementDuration > 0 ? Math.min(1, movementElapsed / movementDuration) : 1
+      const sampled = sampleMovement(movementProgress)
+
+      if (movementSettled || movementProgress >= 1) {
+        centerX = targetCenterX
+        centerY = targetCenterY
+        targetZoom = finalLogoZoom
+        zoomLevel = finalLogoZoom
+      } else {
+        centerX = sampled.x
+        centerY = sampled.y
+        targetZoom = sampled.zoom
+      }
+
+      applyButtonTransform(baseRadius * zoomLevel)
     }
     resizeCanvas()
     window.addEventListener("resize", resizeCanvas)
@@ -20,44 +186,9 @@ export function Globe() {
     // ASCII characters for the globe (from dark to light)
     const asciiChars = " .'`^\",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$"
     
-    // Responsive parameters
-    const isMobile = canvas.width < 768
-    const isTablet = canvas.width >= 768 && canvas.width < 1024
-    
-    // Globe parameters - responsive sizing
-    const radiusMultiplier = isMobile ? 0.35 : isTablet ? 0.32 : 0.3
-    const baseRadius = Math.min(canvas.width, canvas.height) * radiusMultiplier
-    let zoomLevel = 1.0
-    let targetZoom = 1.0
-    
-    // CHANGE: Calculate min zoom to prevent globe from getting too small and stuttering
-    const minGlobeRadius = isMobile ? 80 : 120 // Minimum radius in pixels
-    const minZoom = minGlobeRadius / baseRadius
-    
-    // CHANGE: Calculate max zoom to keep globe within canvas bounds (with padding for glow)
-    const centerX = canvas.width / 2
-    const centerY = isMobile ? canvas.height * 0.4 : canvas.height / 2
-    const maxRadius = Math.min(
-      centerX * 0.85, // 85% of distance to left/right edge
-      centerY * 0.85, // 85% of distance to top edge
-      (canvas.height - centerY) * 0.85 // 85% of distance to bottom edge
-    )
-    const maxZoom = maxRadius / baseRadius
-    
     const starSpeed = 0.2 // Stars move left to simulate globe traveling
     let rotation = 0
     
-    // Scroll event handler for zoom
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const zoomSpeed = 0.001
-      targetZoom -= e.deltaY * zoomSpeed
-      // CHANGE: Use calculated min/max zoom bounds
-      targetZoom = Math.max(minZoom, Math.min(maxZoom, targetZoom))
-    }
-
-    window.addEventListener("wheel", handleWheel, { passive: false })
-
     // Light source position (slightly to the right and up)
     const lightX = 0.5
     const lightY = 0.5
@@ -67,8 +198,8 @@ export function Globe() {
     const stars: Array<{ x: number; y: number; size: number; opacity: number; twinkle: number; twinkleSpeed: number; isTrail?: boolean; life?: number }> = []
     for (let i = 0; i < 800; i++) {
       stars.push({
-        x: Math.random() * canvas.width,
-        y: Math.random() * canvas.height,
+        x: Math.random() * viewportWidth,
+        y: Math.random() * viewportHeight,
         size: Math.random() * 1.5 + 0.5,
         opacity: Math.random() * 0.4 + 0.2,
         twinkle: Math.random() * Math.PI * 5,
@@ -92,7 +223,9 @@ export function Globe() {
 
     // Draw globe to offscreen canvas
     const drawGlobe = (now: number) => {
-      const radius = baseRadius * zoomLevel
+      const radius = Math.max(1, baseRadius * zoomLevel)
+
+      applyButtonTransform(radius)
 
       // Update offscreen canvas size to match globe bounds with padding
       const globeSize = Math.ceil(radius * 2.6)
@@ -254,7 +387,7 @@ export function Globe() {
         const b = star.isTrail ? 150 : 255
         
         ctx.fillStyle = `rgba(${r}, ${g}, ${b}, ${finalOpacity})`
-        ctx.fillRect(star.x, star.y, star.size, star.size)
+  ctx.fillRect(star.x, star.y, star.size, star.size)
         
         if (finalOpacity > 0.1 || star.isTrail) {
           const glowIntensity = star.isTrail ? 0.3 : 0.25
@@ -271,10 +404,36 @@ export function Globe() {
       const deltaTime = now - lastTime
       lastTime = now
 
+      let desiredZoom = finalLogoZoom
+
+      if (!movementSettled) {
+        movementElapsed += deltaTime
+        const progress = Math.min(1, movementElapsed / movementDuration)
+        const sampled = sampleMovement(progress)
+        centerX = sampled.x
+        centerY = sampled.y
+        desiredZoom = sampled.zoom
+
+        if (progress >= 1) {
+          movementSettled = true
+          centerX = targetCenterX
+          centerY = targetCenterY
+          desiredZoom = finalLogoZoom
+          zoomLevel = finalLogoZoom
+        }
+      } else {
+        centerX = targetCenterX
+        centerY = targetCenterY
+        desiredZoom = finalLogoZoom
+      }
+
+      targetZoom = desiredZoom
+
       // Smooth zoom transition with delta time and easing
       const zoomSpeed = 0.004
       zoomLevel += (targetZoom - zoomLevel) * easeOutExpo(0.15) * deltaTime * zoomSpeed
-      const radius = baseRadius * zoomLevel
+      zoomLevel = Math.min(Math.max(zoomLevel, minZoom), maxZoom)
+      const radius = Math.max(1, baseRadius * zoomLevel)
 
       // Move stars left to simulate globe traveling
       for (let i = stars.length - 1; i >= 0; i--) {
@@ -282,8 +441,8 @@ export function Globe() {
         star.x -= starSpeed
         
         if (star.x < -10) {
-          star.x = canvas.width + 10
-          star.y = Math.random() * canvas.height
+          star.x = viewportWidth + 10
+          star.y = Math.random() * viewportHeight
         }
         
         if (star.isTrail) {
@@ -311,8 +470,8 @@ export function Globe() {
       }
 
       // Clear canvas with slight trail effect
-      ctx.fillStyle = "rgba(0, 0, 0, 0.92)"
-      ctx.fillRect(0, 0, canvas.width, canvas.height)
+  ctx.fillStyle = "rgba(0, 0, 0, 0.92)"
+  ctx.fillRect(0, 0, viewportWidth, viewportHeight)
 
       // Draw stars at full FPS
       drawStars(now)
@@ -338,9 +497,19 @@ export function Globe() {
     return () => {
       cancelAnimationFrame(animationFrame)
       window.removeEventListener("resize", resizeCanvas)
-      window.removeEventListener("wheel", handleWheel)
     }
   }, [])
 
-  return <canvas ref={canvasRef} className="w-full h-full" />
+  return (
+  <div ref={rootContainerRef} className="relative h-screen w-full overflow-hidden">
+      <div
+        ref={buttonContainerRef}
+        className="pointer-events-auto absolute z-20 flex items-center justify-center"
+        style={{ left: "50%", top: "50%", opacity: 0, transform: "translate(-50%, -50%)" }}
+      >
+        
+      </div>
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+    </div>
+  )
 }
